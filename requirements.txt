@@ -1,0 +1,8 @@
+aiogram
+openai
+mistralai
+groq
+python-docx
+PyMuPDF
+edge-tts
+certifi
