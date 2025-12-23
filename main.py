@@ -48,7 +48,7 @@ MISTRAL_API_KEY = "X7yHph3zGtchnN9hoKMnyXG7YQUbPefd"
 
 # Ключ для распознавания голоса (Groq) - ВСТАВЬТЕ СЮДА ВАШ КЛЮЧ gsk_...
 GROQ_API_KEY = "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" 
-OPENROUTER_API_KEY = "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" # <-- Вставьте сюда ваш ключ от OpenRouter
+OPENROUTER_API_KEY = "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" # <-- Вставьте сюда ваш ключ от OpenRouter
 
 TOKEN = '8482238582:AAHP8hxF3uJJEbxrpS5N_tbUGxMnB2BSoQ0'
 ADMIN_ID = 8384775839  # <--- ЗАМЕНИТЕ НА ВАШ ID (можно узнать у @userinfobot)
@@ -707,4 +707,5 @@ if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
+
         print("Бот остановлен")
