@@ -47,8 +47,9 @@ from aiogram.exceptions import TelegramBadRequest
 MISTRAL_API_KEY = "X7yHph3zGtchnN9hoKMnyXG7YQUbPefd" 
 
 # Ключ для распознавания голоса (Groq) - ВСТАВЬТЕ СЮДА ВАШ КЛЮЧ gsk_...
-GROQ_API_KEY = "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" 
-OPENROUTER_API_KEY = "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" # <-- Вставьте сюда ваш ключ от OpenRouter
+GROQ_API_KEY = "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" 
+OPENROUTER_API_KEY = "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" # <-- Вставьте сюда ваш ключ от OpenRouter
+ZENMUX_API_KEY = "sk-ai-v1-0bc9b704e174cf2e135d3fd28df7d439b8314aea80ab772a3e3b81a3c7db78fe"
 
 TOKEN = '8482238582:AAHP8hxF3uJJEbxrpS5N_tbUGxMnB2BSoQ0'
 ADMIN_ID = 8384775839  # <--- ЗАМЕНИТЕ НА ВАШ ID (можно узнать у @userinfobot)
@@ -59,6 +60,7 @@ AVAILABLE_MODELS = {
     "🧠 Large (Умная)": "mistral-large-latest",
     "💻 Codestral (Для кода)": "codestral-latest",
     "✨ Gemini 2.0 Flash Experimental": "google/gemini-2.0-flash-exp:free", # Мультимодальная модель (текст + фото)
+    "💎 Gemini 3 Flash": "google/gemini-3-flash-preview-free",
     "🎨 Flux (Лучшая)": "image-gen:flux",
     "🖼️ SDXL (Стильная)": "image-gen:turbo",
     "🐋 DeepSeek R1 (Chimera)": "tngtech/deepseek-r1t2-chimera:free",
@@ -73,6 +75,10 @@ client_mistral = AsyncOpenAI(
     base_url="https://api.mistral.ai/v1"
 )
 client_groq = AsyncGroq(api_key=GROQ_API_KEY) # Асинхронный клиент для голоса
+client_zenmux = AsyncOpenAI(
+    api_key=ZENMUX_API_KEY,
+    base_url="https://zenmux.ai/api/v1"
+)
 
 client_openrouter = None
 if not OPENROUTER_API_KEY or "ВАШ_КЛЮЧ" in OPENROUTER_API_KEY:
@@ -174,6 +180,7 @@ async def cmd_start(message: types.Message):
             await bot.send_message(referrer_id, f"🎉 **У вас новый реферал!**\nПользователь {message.from_user.full_name} присоединился по вашей ссылке.", parse_mode="Markdown")
 
     user_context[user_id] = {"history": [], "model": DEFAULT_MODEL, "system_prompt": DEFAULT_SYSTEM_PROMPT, "tts_mode": False, "referrals": 0}
+    save_user_data(user_id)
     await message.answer("Привет! Я ваш ИИ-ассистент. Распознаю голос, отвечаю на вопросы и рисую. Используйте /mode для выбора модели.", reply_markup=get_model_keyboard())
 
 @dp.message(Command("help"))
@@ -617,6 +624,35 @@ async def _handle_image_generation(message: Message, text: str, model: str = "fl
         logging.error(f"Ошибка при генерации изображения: {e}")
         await message.answer(f"⚠️ Не удалось создать изображение. Ошибка: {e}")
 
+async def _handle_zenmux_chat(message: Message, text: str, data: dict):
+    await bot.send_chat_action(chat_id=message.chat.id, action="typing")
+    processing_msg = await message.answer("⏳ ZenMux думает...")
+    history = data["history"]
+    history.append({"role": "user", "content": text})
+    
+    try:
+        system_prompt_content = data.get("system_prompt", DEFAULT_SYSTEM_PROMPT)
+        system_message = {"role": "system", "content": system_prompt_content + HIDDEN_SYSTEM_PROMPT}
+        
+        chat_response = await client_zenmux.chat.completions.create(
+            model=data["model"],
+            messages=[system_message] + history[-MAX_HISTORY_LENGTH:]
+        )
+        
+        await processing_msg.delete()
+        bot_answer = chat_response.choices[0].message.content if chat_response.choices else "Пустой ответ от ZenMux."
+        history.append({"role": "assistant", "content": bot_answer})
+        save_user_data(message.from_user.id)
+        await process_model_response(message, bot_answer)
+        
+    except AuthenticationError:
+        await processing_msg.delete()
+        await message.answer("⚠️ **Ошибка**: Неверный API-ключ ZenMux.")
+    except Exception as e:
+        await processing_msg.delete()
+        logging.error(f"Ошибка ZenMux: {e}")
+        await message.answer(f"⚠️ Ошибка ZenMux: {e}")
+
 async def _handle_openrouter_chat(message: Message, text: str, data: dict):
     if not client_openrouter:
         await message.answer("⚠️ Модели через OpenRouter недоступны. Проверьте, правильно ли указан API-ключ.")
@@ -693,6 +729,8 @@ async def handle_text_message(message: Message, text_from_voice: str = None):
         if current_model.startswith("image-gen:"):
             model_type = current_model.split(":")[1]
         await _handle_image_generation(message, text, model=model_type)
+    elif "zenmux" in current_model or "gemini-3" in current_model: # Обработка ZenMux
+        await _handle_zenmux_chat(message, text, data)
     elif '/' in current_model: # Модели OpenRouter содержат '/' в названии
         await _handle_openrouter_chat(message, text, data)
     else: # По умолчанию используем Mistral
@@ -707,7 +745,6 @@ if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-
         print("Бот остановлен")
 
 
