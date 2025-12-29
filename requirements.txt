@@ -1,8 +1,11 @@
+python-dotenv
 aiogram
 openai
-mistralai
 groq
+edge-tts
 python-docx
 PyMuPDF
-edge-tts
-certifi
+reportlab
+googlesearch-python
+flet
+streamlit

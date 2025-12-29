@@ -1,12 +1,14 @@
 import asyncio
 import logging
 import os
+import sys
 import urllib.parse
 import random
 import json
 import re
 from io import BytesIO
 from openai import AsyncOpenAI, AuthenticationError, RateLimitError
+from dotenv import load_dotenv
 
 try:
     import docx
@@ -34,6 +36,11 @@ try:
 except ImportError:
     edge_tts = None
     logging.warning("Библиотека edge-tts не найдена. Голосовые ответы не будут работать. Установите: pip install edge-tts")
+try:
+    from googlesearch import search as google_search
+except ImportError:
+    google_search = None
+    logging.warning("Библиотека googlesearch-python не найдена. Поиск не будет работать. Установите: pip install googlesearch-python")
 
 from groq import AsyncGroq  # Библиотека для распознавания голоса
 from aiogram import Bot, Dispatcher, types, F
@@ -42,17 +49,19 @@ from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, C
     InlineQuery, InlineQueryResultArticle, InputTextMessageContent
 from aiogram.exceptions import TelegramBadRequest
 
+# Загрузка переменных окружения из .env
+load_dotenv()
+
 # --- НАСТРОЙКИ ---
 # Ключ для текстовых ответов (Mistral)
-MISTRAL_API_KEY = "X7yHph3zGtchnN9hoKMnyXG7YQUbPefd" 
+MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY")
 
 # Ключ для распознавания голоса (Groq) - ВСТАВЬТЕ СЮДА ВАШ КЛЮЧ gsk_...
-GROQ_API_KEY = "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" 
-OPENROUTER_API_KEY = "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" # <-- Вставьте сюда ваш ключ от OpenRouter
-ZENMUX_API_KEY = "sk-ai-v1-0bc9b704e174cf2e135d3fd28df7d439b8314aea80ab772a3e3b81a3c7db78fe"
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 
-TOKEN = '8482238582:AAHP8hxF3uJJEbxrpS5N_tbUGxMnB2BSoQ0'
-ADMIN_ID = 8384775839  # <--- ЗАМЕНИТЕ НА ВАШ ID (можно узнать у @userinfobot)
+TOKEN = os.getenv("BOT_TOKEN")
+ADMIN_ID = int(os.getenv("ADMIN_ID", 0))
 
 # Список моделей
 AVAILABLE_MODELS = {
@@ -60,7 +69,6 @@ AVAILABLE_MODELS = {
     "🧠 Large (Умная)": "mistral-large-latest",
     "💻 Codestral (Для кода)": "codestral-latest",
     "✨ Gemini 2.0 Flash Experimental": "google/gemini-2.0-flash-exp:free", # Мультимодальная модель (текст + фото)
-    "💎 Gemini 3 Flash": "google/gemini-3-flash-preview-free",
     "🎨 Flux (Лучшая)": "image-gen:flux",
     "🖼️ SDXL (Стильная)": "image-gen:turbo",
     "🐋 DeepSeek R1 (Chimera)": "tngtech/deepseek-r1t2-chimera:free",
@@ -75,10 +83,6 @@ client_mistral = AsyncOpenAI(
     base_url="https://api.mistral.ai/v1"
 )
 client_groq = AsyncGroq(api_key=GROQ_API_KEY) # Асинхронный клиент для голоса
-client_zenmux = AsyncOpenAI(
-    api_key=ZENMUX_API_KEY,
-    base_url="https://zenmux.ai/api/v1"
-)
 
 client_openrouter = None
 if not OPENROUTER_API_KEY or "ВАШ_КЛЮЧ" in OPENROUTER_API_KEY:
@@ -155,6 +159,8 @@ async def set_main_menu(bot: Bot):
         BotCommand(command='/start', description='👋 Перезапуск'),
         BotCommand(command='/help', description='ℹ️ Помощь'),
         BotCommand(command='/mode', description='⚙️ Модель'),
+        BotCommand(command='/search', description='🌍 Поиск в сети'),
+        BotCommand(command='/donate', description='☕ Поддержать'),
         BotCommand(command='/clear', description='🧹 Очистка'),
         BotCommand(command='/system', description='🤖 Настройка роли'),
         BotCommand(command='/tts', description='🗣 Голосовые ответы'),
@@ -196,9 +202,11 @@ async def cmd_help(message: types.Message):
         "⚙️ **Команды:**\n"
         "/mode — Выбор нейросети\n"
         "/clear — Очистить память\n"
+        "/search — Поиск в интернете\n"
         "/system — Настройка роли\n"
         "/tts — Вкл/Выкл озвучку ответов\n"
         "/profile — Ваш профиль и реф. ссылка\n"
+        "/donate — Поддержать автора\n"
         "/feedback — Написать разработчику"
     )
     await message.answer(help_text, parse_mode="Markdown")
@@ -247,6 +255,106 @@ async def cmd_profile(message: types.Message):
     bot_username = (await bot.get_me()).username
     ref_link = f"https://t.me/{bot_username}?start={user_id}"
     await message.answer(f"👤 **Ваш профиль**\n\n🆔 ID: `{user_id}`\n👥 Приглашено друзей: **{data.get('referrals', 0)}**\n\n🔗 **Ваша реферальная ссылка:**\n`{ref_link}`", parse_mode="Markdown")
+
+@dp.message(Command("donate"))
+async def cmd_donate(message: types.Message):
+    text = (
+        "✨ **Обращение от создателя**\n\n"
+        "Привет! Меня зовут Руслан, и я тот самый человек, который учит этого бота быть умным и полезным для вас. 👨‍💻\n\n"
+        "Я вкладываю много сил и времени, чтобы проект развивался, а серверы работали стабильно. Ваша поддержка помогает мне оплачивать мощные нейросети и добавлять новые функции.\n\n"
+        "Любой донат — это ваше «спасибо», которое вдохновляет меня работать дальше! 🚀\n\n"
+        "☕ **Поддержать проект:**\n"
+        "💳 **Карта:** `4361 5390 8155 9512`\n"
+        "💎 **USDT (TRC20):** `T...`\n"
+        "\nСпасибо, что вы с нами! 🤝"
+    )
+    
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Я отправил донат", callback_data="donate_sent")]
+    ])
+    await message.answer(text, parse_mode="Markdown", reply_markup=keyboard)
+
+@dp.callback_query(F.data == "donate_sent")
+async def process_donate_sent(callback: CallbackQuery):
+    user = callback.from_user
+    # Уведомление создателю (Вам)
+    await bot.send_message(
+        ADMIN_ID,
+        f"💰 **У вас новый донат!**\n\n"
+        f"👤 От: {user.full_name} (@{user.username})\n"
+        f"🆔 ID: `{user.id}`\n"
+        f"Пользователь сообщил об отправке средств.",
+        parse_mode="Markdown"
+    )
+    await callback.answer("Спасибо большое! Руслан получил уведомление. ❤️", show_alert=True)
+    await callback.message.edit_reply_markup(reply_markup=None)
+
+@dp.message(Command("search"))
+async def cmd_search(message: types.Message):
+    if not google_search:
+        await message.answer("⚠️ Поиск недоступен. Библиотека `googlesearch-python` не установлена.\nПопросите администратора выполнить: `pip install googlesearch-python`", parse_mode="Markdown")
+        return
+
+    args = message.text.split(maxsplit=1)
+    if len(args) < 2:
+        await message.answer("🔎 **Поиск в интернете**\n\nВведите команду и ваш вопрос:\n`/search погода в Москве`\n`/search кто такой капибара`", parse_mode="Markdown")
+        return
+
+    query = args[1]
+    user_id = message.from_user.id
+    data = get_user_data(user_id)
+    current_model = data["model"]
+
+    await bot.send_chat_action(chat_id=message.chat.id, action="typing")
+    status_msg = await message.answer(f"🌍 Ищу в Google: «{query}»...")
+
+    try:
+        results_text = ""
+        # Запускаем синхронный поиск в отдельном потоке
+        search_results = await asyncio.to_thread(lambda: list(google_search(query, num_results=5, advanced=True, lang="ru")))
+        
+        if search_results:
+            for res in search_results:
+                results_text += f"🔹 {res.title}\n🔗 {res.url}\n{res.description}\n\n"
+            
+        if not results_text:
+            await status_msg.edit_text("😔 Ничего не найдено по вашему запросу.")
+            return
+
+        # Формируем контекст для ИИ
+        prompt = (
+            f"Пользователь искал в интернете: «{query}».\n\n"
+            f"🔍 **Найденная информация:**\n{results_text}\n"
+            f"Используя эту информацию, дай развернутый ответ на вопрос пользователя. Укажи источники, если нужно."
+        )
+
+        # Временно добавляем контекст поиска в историю для генерации ответа
+        history = data["history"]
+        # Мы не добавляем сам текст результатов в историю пользователя, чтобы не засорять её,
+        # а отправляем его как часть текущего запроса.
+        
+        system_prompt = data.get("system_prompt", DEFAULT_SYSTEM_PROMPT)
+        messages = [{"role": "system", "content": system_prompt + HIDDEN_SYSTEM_PROMPT}] + history + [{"role": "user", "content": prompt}]
+
+        if '/' in current_model and client_openrouter:
+             response = await client_openrouter.chat.completions.create(model=current_model, messages=messages)
+        else:
+             response = await client_mistral.chat.completions.create(model=current_model, messages=messages)
+        
+        bot_answer = response.choices[0].message.content
+        
+        await status_msg.edit_text(f"🔎 **Результаты поиска:**\n\n{results_text}\n⏳ _Анализирую информацию..._", parse_mode=None)
+        
+        # Сохраняем в историю только вопрос и ответ (без сырых результатов поиска)
+        history.append({"role": "user", "content": f"Поиск: {query}"})
+        history.append({"role": "assistant", "content": bot_answer})
+        save_user_data(user_id)
+
+        await process_model_response(message, bot_answer)
+
+    except Exception as e:
+        logging.error(f"Search error: {e}")
+        await status_msg.edit_text(f"⚠️ Ошибка при поиске: {e}")
 
 @dp.message(Command("feedback"))
 async def cmd_feedback(message: types.Message):
@@ -624,35 +732,6 @@ async def _handle_image_generation(message: Message, text: str, model: str = "fl
         logging.error(f"Ошибка при генерации изображения: {e}")
         await message.answer(f"⚠️ Не удалось создать изображение. Ошибка: {e}")
 
-async def _handle_zenmux_chat(message: Message, text: str, data: dict):
-    await bot.send_chat_action(chat_id=message.chat.id, action="typing")
-    processing_msg = await message.answer("⏳ ZenMux думает...")
-    history = data["history"]
-    history.append({"role": "user", "content": text})
-    
-    try:
-        system_prompt_content = data.get("system_prompt", DEFAULT_SYSTEM_PROMPT)
-        system_message = {"role": "system", "content": system_prompt_content + HIDDEN_SYSTEM_PROMPT}
-        
-        chat_response = await client_zenmux.chat.completions.create(
-            model=data["model"],
-            messages=[system_message] + history[-MAX_HISTORY_LENGTH:]
-        )
-        
-        await processing_msg.delete()
-        bot_answer = chat_response.choices[0].message.content if chat_response.choices else "Пустой ответ от ZenMux."
-        history.append({"role": "assistant", "content": bot_answer})
-        save_user_data(message.from_user.id)
-        await process_model_response(message, bot_answer)
-        
-    except AuthenticationError:
-        await processing_msg.delete()
-        await message.answer("⚠️ **Ошибка**: Неверный API-ключ ZenMux.")
-    except Exception as e:
-        await processing_msg.delete()
-        logging.error(f"Ошибка ZenMux: {e}")
-        await message.answer(f"⚠️ Ошибка ZenMux: {e}")
-
 async def _handle_openrouter_chat(message: Message, text: str, data: dict):
     if not client_openrouter:
         await message.answer("⚠️ Модели через OpenRouter недоступны. Проверьте, правильно ли указан API-ключ.")
@@ -714,7 +793,7 @@ async def _handle_mistral_chat(message: Message, text: str, data: dict):
         await processing_msg.delete()
         await message.answer(f"Ошибка Mistral: {e}", parse_mode=None)
 
-@dp.message(F.text)
+@dp.message(F.text & ~F.text.strip().startswith('/'))
 async def handle_text_message(message: Message, text_from_voice: str = None):
     text = text_from_voice or message.text
     if not text: 
@@ -729,8 +808,6 @@ async def handle_text_message(message: Message, text_from_voice: str = None):
         if current_model.startswith("image-gen:"):
             model_type = current_model.split(":")[1]
         await _handle_image_generation(message, text, model=model_type)
-    elif "zenmux" in current_model or "gemini-3" in current_model: # Обработка ZenMux
-        await _handle_zenmux_chat(message, text, data)
     elif '/' in current_model: # Модели OpenRouter содержат '/' в названии
         await _handle_openrouter_chat(message, text, data)
     else: # По умолчанию используем Mistral
@@ -746,5 +823,3 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         print("Бот остановлен")
-
-
