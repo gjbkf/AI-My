@@ -793,10 +793,14 @@ async def _handle_mistral_chat(message: Message, text: str, data: dict):
         await processing_msg.delete()
         await message.answer(f"Ошибка Mistral: {e}", parse_mode=None)
 
-@dp.message(F.text & ~F.text.strip().startswith('/'))
+@dp.message(F.text)
 async def handle_text_message(message: Message, text_from_voice: str = None):
     text = text_from_voice or message.text
     if not text: 
+        return
+
+    # Если сообщение начинается с команды (например /search), но не попало в свой хендлер — игнорируем его
+    if text.strip().startswith('/'):
         return
 
     user_id = message.from_user.id
